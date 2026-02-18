@@ -205,3 +205,12 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- Custom Project Ignores ---
+stock_data.db
+*.db
+data/
+data/raw/
+data/processed/
+models/
+.env
