@@ -16,7 +16,7 @@ def load_data(ticker):
     )
     
     # Load News
-    print(f"   Loading news for {ticker}...")
+    print(f"   Loading news for {ticker}")
     df_news = pd.read_sql(
         "SELECT date, sentiment_score FROM news WHERE ticker = ?",
         conn, params=(ticker,)
@@ -98,7 +98,7 @@ def create_training_set(ticker):
     full_df.dropna(inplace=True)
     full_df.sort_index(inplace=True)
     
-    print(f"✅ Training set ready: {len(full_df)} rows. Range: {full_df.index.min()} to {full_df.index.max()}")
+    print(f" Training set ready: {len(full_df)} rows. Range: {full_df.index.min()} to {full_df.index.max()}")
     return full_df
 
 if __name__ == "__main__":

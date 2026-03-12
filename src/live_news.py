@@ -13,11 +13,11 @@ def fetch_live_news(ticker):
     # Ask Google for news about the stock
     rss_url = f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en"
     
-    print(f"📡 Fetching live news for {ticker}...")
+    print(f" Fetching live news for {ticker}...")
     feed = feedparser.parse(rss_url)
     
     if not feed.entries:
-        print(f"⚠️ No recent news found for {ticker}.")
+        print(f" No recent news found for {ticker}.")
         return pd.DataFrame()
 
     # Extract headlines
@@ -31,7 +31,7 @@ def fetch_live_news(ticker):
         dates.append(datetime.now().strftime('%Y-%m-%d'))
 
     # Run Live Sentiment Analysis (Using your existing sentiment engine)
-    print(f"🧠 Analyzing sentiment for {len(headlines)} headlines...")
+    print(f" Analyzing sentiment for {len(headlines)} headlines...")
     bert_results = predict_sentiment(headlines)
     
     # Format data
@@ -51,10 +51,10 @@ def fetch_live_news(ticker):
     # This is what the LSTM needs (one row per day)
     daily_sentiment = df.groupby('date')['sentiment_score'].mean().reset_index()
     
-    print(f"✅ Generated live sentiment score: {daily_sentiment['sentiment_score'].values[0]:.4f}")
+    print(f" Generated live sentiment score: {daily_sentiment['sentiment_score'].values[0]:.4f}")
     return daily_sentiment
 
 if __name__ == "__main__":
-    # Test with a stock NOT in your database
+    # Test with a stock NOT in the database
     df = fetch_live_news("NFLX")
     print(df)
