@@ -1,5 +1,10 @@
-alpaca-py
-python-dotenv
 pandas
-requests
-tqdm
+numpy
+alpaca-trade-api
+python-dotenv
+sqlalchemy
+yfinance
+transformers
+torch
+scikit-learn
+streamlit

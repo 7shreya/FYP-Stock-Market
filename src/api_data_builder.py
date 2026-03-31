@@ -1,88 +1,132 @@
-# src/api_data_builder.py
-import os
-import time
+import alpaca_trade_api as tradeapi
 import pandas as pd
+import requests
+import io
+import time
+import os
 from dotenv import load_dotenv
-from alpaca_trade_api.rest import REST, TimeFrame
 
-# 1. Credentials & Setup
+# Load environment variables from the .env file
 load_dotenv()
+
+# Configuration and API Keys
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 BASE_URL = "https://paper-api.alpaca.markets"
 
-try:
-    api = REST(key_id=API_KEY, secret_key=SECRET_KEY, base_url=BASE_URL, api_version='v2')
-except Exception as e:
-    print(f"Connection failed: {e}")
-    exit()
+if not API_KEY or not SECRET_KEY:
+    raise ValueError("Alpaca API keys not found")
 
-def fetch_liquid_tickers(api, limit=500):
-    assets = api.list_assets(status='active', asset_class='us_equity')
-    valid = [a.symbol for a in assets if a.tradable and a.marginable and a.fractionable and a.exchange in ['NYSE', 'NASDAQ']]
-    return valid[:limit]
+START_DATE = "2020-01-01"
+END_DATE = "2025-01-01"
+DATA_DIR = os.path.join("data", "training_raw")
 
-def build_dataset(ticker, start_date, end_date):
-    start_iso, end_iso = f"{start_date}T00:00:00Z", f"{end_date}T23:59:59Z"
+def fetch_sp500_tickers_spdr():
+    """
+    Extracts the official S&P 500 list from State Street Global Advisors
+    """
+    print("Fetching S&P 500 constituents from State Street...")
+    url = "https://www.ssga.com/us/en/intermediary/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        news_items = api.get_news(ticker, start=start_iso, end=end_iso, limit=10000)
-    except Exception:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        df = pd.read_excel(io.BytesIO(response.content), skiprows=4)
+        df = df.dropna(subset=['Ticker'])
+        
+        # Clean formatting for Alpaca compatibility
+        clean_tickers = [str(t).replace('.', '-') for t in df['Ticker'].tolist() if str(t) != 'nan']
+        return clean_tickers[:500]
+    except Exception as e:
+        print(f"Error fetching S&P 500 list: {e}")
+        return []
+
+def chunked_date_ranges(start, end, chunk_days=180):
+    """
+    Splits a date range into smaller chunks to prevent API server timeouts
+    """
+    start_dt = pd.to_datetime(start)
+    end_dt = pd.to_datetime(end)
+    ranges = []
+    current = start_dt
+    
+    while current < end_dt:
+        next_date = min(current + pd.Timedelta(days=chunk_days), end_dt)
+        ranges.append((current.strftime('%Y-%m-%d'), next_date.strftime('%Y-%m-%d')))
+        current = next_date
+        
+    return ranges
+
+def fetch_alpaca_data(api, ticker):
+    """
+    Fetches OHLCV prices and news from Alpaca, merging them chronologically
+    """
+    # 1. Fetch Price Data
+    try:
+        bars = api.get_bars(ticker, tradeapi.rest.TimeFrame.Day, start=START_DATE, end=END_DATE, adjustment='all').df
+        if bars.empty:
+            return False
+            
+        bars.index = bars.index.tz_convert('America/New_York')
+        bars['date'] = bars.index.date
+    except Exception as e:
+        print(f"Price data error for {ticker}: {e}")
         return False
 
-    if len(news_items) < 50: return False
-        
-    print(f"[{ticker}] Processing. Applying Strict Temporal Alignment...")
+    # 2. Fetch News Data in Chunks
+    all_news = []
+    date_chunks = chunked_date_ranges(START_DATE, END_DATE, chunk_days=180)
     
-    # --- ALIGNMENT ALGORITHM (Zero Look-Ahead Bias) ---
-    aligned_news = []
-    for item in news_items:
-        dt = pd.to_datetime(item.created_at)
-        if dt.tzinfo is None: dt = dt.tz_localize('UTC')
-        dt_est = dt.tz_convert('US/Eastern')
-        
-        # Shift >= 4:00 PM to tomorrow
-        if dt_est.hour >= 16:
-            dt_est += pd.Timedelta(days=1)
+    for s, e in date_chunks:
+        try:
+            news_chunk = api.get_news(ticker, start=s, end=e, limit=10000)
+            for n in news_chunk:
+                all_news.append({
+                    'date': pd.to_datetime(n.created_at).tz_convert('America/New_York').date(),
+                    'headline': n.headline
+                })
+            time.sleep(0.3)
+        except Exception:
+            pass
             
-        # Shift Weekends to Monday
-        if dt_est.dayofweek == 5: # Saturday
-            dt_est += pd.Timedelta(days=2)
-        elif dt_est.dayofweek == 6: # Sunday
-            dt_est += pd.Timedelta(days=1)
-            
-        aligned_news.append({'date': dt_est.date(), 'headline': item.headline})
-        
-    news_df = pd.DataFrame(aligned_news)
-    if not news_df.empty:
-        news_df = news_df.groupby('date')['headline'].apply(lambda x: '. '.join(x)).reset_index()
-        news_df.set_index('date', inplace=True)
+    # 3. Merge Data
+    if all_news:
+        news_df = pd.DataFrame(all_news)
+        grouped_news = news_df.groupby('date')['headline'].apply(lambda x: ' | '.join(x)).reset_index()
     else:
-        news_df = pd.DataFrame(columns=['headline'])
+        grouped_news = pd.DataFrame(columns=['date', 'headline'])
 
-    # --- STOCK SPLIT / DIVIDEND ADJUSTMENT ---
-    try:
-        bars = api.get_bars(ticker, TimeFrame.Day, start_iso, end_iso, adjustment='all').df
-        if bars.empty: return False
-        bars.index = bars.index.date
-        bars.index.name = 'date'
-    except Exception:
-        return False
-
-    # Merge and Export
-    combined_df = bars.join(news_df, how='left')
-    combined_df['headline'] = combined_df['headline'].fillna("No significant news reported today.")
+    merged_df = pd.merge(bars, grouped_news, on='date', how='left')
+    merged_df['headline'] = merged_df['headline'].fillna("No significant news reported today.")
     
-    req_cols = ['open', 'high', 'low', 'close', 'volume']
-    if not all(col in combined_df.columns for col in req_cols): return False
-            
-    final_df = combined_df[['open', 'high', 'low', 'close', 'volume', 'headline']]
-    final_df.to_csv(f"data/training_raw/{ticker}_raw.csv")
+    final_df = merged_df[['Open', 'High', 'Low', 'Close', 'Volume', 'headline']]
+    
+    save_path = os.path.join(DATA_DIR, f"{ticker}_raw.csv")
+    final_df.to_csv(save_path, index=False)
+    
     return True
 
 if __name__ == "__main__":
-    os.makedirs("data/training_raw", exist_ok=True)
-    tickers = fetch_liquid_tickers(api, limit=500)
-    for ticker in tickers:
-        build_dataset(ticker, "2020-01-01", "2025-12-31")
-        time.sleep(0.5)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    
+    api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL)
+    sp500_tickers = fetch_sp500_tickers_spdr()
+    
+    if not sp500_tickers:
+        print("Failed to initialize ticker list. Exiting.")
+        exit()
+        
+    print(f"Starting Alpaca data extraction for {len(sp500_tickers)} ")
+    success_count = 0
+    
+    for idx, ticker in enumerate(sp500_tickers, 1):
+        print(f"Processing [{idx}/{len(sp500_tickers)}]: {ticker}...", end=" ")
+        
+        if fetch_alpaca_data(api, ticker):
+            print("Completed.")
+            success_count += 1
+        else:
+            print("Skipped due to missing data.")
+            
+    print(f"Extraction finished. Successfully generated {success_count} datasets")
