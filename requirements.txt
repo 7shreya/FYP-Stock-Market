@@ -9,3 +9,5 @@ torch
 scikit-learn
 streamlit
 tensorflow-cpu
+plotly
+torchvision
