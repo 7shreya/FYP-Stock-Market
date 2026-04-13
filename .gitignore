@@ -211,6 +211,11 @@ stock_data.db
 *.db
 data/
 data/raw/
-data/processed/
+data/processed/s
 models/
 .env
+
+# Python Cache
+__pycache__/
+*.pyc
+

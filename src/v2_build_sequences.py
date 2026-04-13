@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 DB_PATH = os.getenv('DB_PATH', '../data/stock_data.db')
 SEQUENCE_LENGTH = 60 
-HORIZON = 5  # V2 Upgrade: Predicting a 5-day swing
+HORIZON = 5  #Predicting 5-day price
 
 def get_db_connection():
     return sqlite3.connect(DB_PATH)

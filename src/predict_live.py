@@ -3,178 +3,181 @@ import pandas as pd
 import numpy as np
 import alpaca_trade_api as tradeapi
 import tensorflow as tf
+import joblib
+import difflib
 from tensorflow.keras.layers import Layer
 import tensorflow.keras.backend as K
-from sklearn.preprocessing import StandardScaler
 from transformers import pipeline
 from dotenv import load_dotenv
-import warnings
-import logging
 
-warnings.filterwarnings('ignore')
-logging.getLogger("transformers").setLevel(logging.ERROR)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
-# --- 1. LOAD CUSTOM LAYERS & METRICS ---
+# ==========================================
+# CUSTOM NEURAL NETWORK LAYERS
+# ==========================================
 @tf.keras.utils.register_keras_serializable()
 def directional_accuracy(y_true, y_pred):
-    y_true_sign = tf.sign(y_true)
-    y_pred_sign = tf.sign(y_pred)
-    correct = tf.cast(tf.equal(y_true_sign, y_pred_sign), tf.float32)
-    return tf.reduce_mean(correct) * 100
+    return tf.reduce_mean(tf.cast(tf.equal(tf.sign(y_true), tf.sign(y_pred)), tf.float32)) * 100
 
 @tf.keras.utils.register_keras_serializable()
 class TemporalAttention(Layer):
     def __init__(self, **kwargs):
         super(TemporalAttention, self).__init__(**kwargs)
-
     def build(self, input_shape):
-        self.W = self.add_weight(name='attention_weight', shape=(input_shape[-1], 1), 
-                                 initializer='random_normal', trainable=True)
-        self.b = self.add_weight(name='attention_bias', shape=(input_shape[1], 1), 
-                                 initializer='zeros', trainable=True)
+        self.W = self.add_weight(name='att_w', shape=(input_shape[-1], 1), initializer='random_normal')
+        self.b = self.add_weight(name='att_b', shape=(input_shape[1], 1), initializer='zeros')
         super(TemporalAttention, self).build(input_shape)
-
     def call(self, x):
         e = K.tanh(tf.matmul(x, self.W) + self.b)
-        a = K.softmax(e, axis=1) 
-        output = x * a
-        return K.sum(output, axis=1) 
+        a = K.softmax(e, axis=1)
+        return K.sum(x * a, axis=1)
+    def get_config(self): return super(TemporalAttention, self).get_config()
 
-    def get_config(self):
-        config = super(TemporalAttention, self).get_config()
-        return config
 
-# --- 2. DATA PIPELINE ---
-def get_live_data(ticker, lookback_days=400):
+# ==========================================
+# SMART TICKER RESOLUTION (FUZZY SEARCH)
+# ==========================================
+def resolve_ticker(user_input, api):
+    """Matches company names or typos to the closest valid Alpaca ticker."""
+    user_input = user_input.upper().strip()
+    try:
+        # Fetch active assets to avoid overwhelming the search
+        assets = api.list_assets(status='active', asset_class='us_equity')
+        ticker_list = [a.symbol for a in assets]
+        name_map = {a.name.upper(): a.symbol for a in assets if len(a.name) > 3}
+        
+        # 1. Exact Match
+        if user_input in ticker_list: return user_input
+        
+        # 2. Fuzzy match by Company Name (e.g., "APPLE" -> "AAPL")
+        matches = difflib.get_close_matches(user_input, name_map.keys(), n=1, cutoff=0.5)
+        if matches: return name_map[matches[0]]
+        
+        # 3. Fuzzy Match by Ticker Typo
+        t_matches = difflib.get_close_matches(user_input, ticker_list, n=1, cutoff=0.6)
+        return t_matches[0] if t_matches else user_input
+    except: 
+        return user_input
+
+
+# ==========================================
+# DATA PIPELINE & FEATURE ENGINEERING
+# ==========================================
+def fetch_and_align_data(ticker):
     load_dotenv()
-    api = tradeapi.REST(os.getenv('ALPACA_API_KEY'), os.getenv('ALPACA_SECRET_KEY'), 
-                        os.getenv('APCA_API_BASE_URL', 'https://paper-api.alpaca.markets'), api_version='v2')
+    api = tradeapi.REST(os.getenv('ALPACA_API_KEY'), os.getenv('ALPACA_SECRET_KEY'), os.getenv('APCA_API_BASE_URL'), api_version='v2')
     
-    end_date = pd.Timestamp.now(tz='America/New_York') - pd.Timedelta(minutes=20)
-    start_date = end_date - pd.Timedelta(days=lookback_days)
+    final_ticker = resolve_ticker(ticker, api)
+    
+    # Temporal Settings (20 min delay for basic tier)
+    now_est = pd.Timestamp.now(tz='America/New_York')
+    end_date = now_est - pd.Timedelta(minutes=20)
+    start_date = (end_date - pd.Timedelta(days=150)).isoformat()
     
     try:
-        barset = api.get_bars(ticker, tradeapi.TimeFrame.Day, start=start_date.isoformat(), end=end_date.isoformat()).df
-        spy_barset = api.get_bars('SPY', tradeapi.TimeFrame.Day, start=start_date.isoformat(), end=end_date.isoformat()).df
-    except Exception as e:
-        return None, None, str(e)
+        bars = api.get_bars(final_ticker, tradeapi.TimeFrame.Day, start=start_date, end=end_date.isoformat()).df
+        spy = api.get_bars('SPY', tradeapi.TimeFrame.Day, start=start_date, end=end_date.isoformat()).df
+        news = api.get_news(final_ticker, start=(end_date - pd.Timedelta(days=40)).isoformat(), limit=40)
         
-    barset.index = barset.index.normalize()
-    spy_barset.index = spy_barset.index.normalize()
+        if bars.empty or spy.empty: return None, None, f"Data unavailable for {final_ticker}", None, final_ticker
+        bars.columns = [c.lower() for c in bars.columns]
+        spy.columns = [c.lower() for c in spy.columns]
+    except Exception as e: 
+        return None, None, str(e), None, final_ticker
+
+    # Align Indices & Strip Timezones to fix mapping errors
+    for frame in [bars, spy]: frame.index = frame.index.normalize().tz_localize(None)
+
+    # --- FEATURE ENGINEERING ---
+    df = pd.DataFrame(index=bars.index)
     
-    df = pd.DataFrame(index=barset.index)
-    df['close'] = barset['close']
-    df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+    # CRITICAL: Preserve the raw close price for the UI Plotly Graph
+    df['close'] = bars['close'] 
     
-    df['spy_close'] = spy_barset['close']
-    df['spy_log_return'] = np.log(df['spy_close'] / df['spy_close'].shift(1))
+    df['log_return'] = np.log(bars['close'] / bars['close'].shift(1))
+    df['spy_log_return'] = np.log(spy['close'] / spy['close'].shift(1))
     
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi_14'] = 100 - (100 / (1 + rs))
+    # Technical Indicators
+    delta = bars['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    df['rsi_14'] = 100 - (100 / (1 + (gain / loss)))
     
-    exp1 = df['close'].ewm(span=12, adjust=False).mean()
-    exp2 = df['close'].ewm(span=26, adjust=False).mean()
+    exp1 = bars['close'].ewm(span=12, adjust=False).mean()
+    exp2 = bars['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = exp1 - exp2
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    df['bb_width'] = (bars['close'].rolling(20).std() * 4) / bars['close'].rolling(20).mean()
     
-    sma_20 = df['close'].rolling(window=20).mean()
-    std_20 = df['close'].rolling(window=20).std()
-    df['bb_width'] = (sma_20 + (std_20 * 2) - (sma_20 - (std_20 * 2))) / sma_20
-    
-    df = df.dropna()
-    price_df = df[['log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']]
-    
-    # --- NLP PIPELINE ---
-    target_dates = price_df.index[-60:]
-    news_items = api.get_news(ticker, start=target_dates[0].isoformat(), end=end_date.isoformat(), limit=50)
-    
-    nlp = pipeline("text-classification", model="ProsusAI/finbert", top_k=None)
-    
-    sentiment_records = []
-    recent_headlines = [] # NEW: We will save the actual articles here
-    
-    for article in news_items:
-        date = pd.Timestamp(article.created_at).tz_convert('America/New_York').normalize()
-        text = f"{article.headline}. {article.summary}"[:512]
-        
-        scores = nlp(text)[0]
-        score_dict = {s['label']: s['score'] for s in scores}
-        
-        sentiment_records.append({
-            'date': date,
-            'pos': score_dict.get('positive', 0.0),
-            'neg': score_dict.get('negative', 0.0),
-            'neu': score_dict.get('neutral', 0.0)
-        })
-        
-        # Save headline info for the UI
-        recent_headlines.append({
-            "date": date.strftime('%Y-%m-%d'),
-            "headline": article.headline,
-            "url": article.url,
-            "sentiment": "Positive" if score_dict.get('positive') > 0.4 else "Negative" if score_dict.get('negative') > 0.4 else "Neutral"
-        })
-        
-    news_df = pd.DataFrame(sentiment_records)
-    if not news_df.empty:
-        news_df = news_df.groupby('date').mean()
-    
-    sent_list = []
-    for d in target_dates:
-        if not news_df.empty and d in news_df.index:
-            sent_list.append(news_df.loc[d].values)
-        else:
-            sent_list.append([0.0, 0.0, 1.0]) 
-            
-    sentiment_df = pd.DataFrame(sent_list, index=target_dates, columns=['avg_pos', 'avg_neg', 'avg_neu'])
-    
-    return price_df, sentiment_df, recent_headlines
+    # Slice the final 60 days including the close price
+    price_slice = df[['close', 'log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']].dropna().tail(60)
 
-# --- 3. INFERENCE ENGINE FOR WEB APP ---
+    # --- NLP SENTIMENT STREAM ---
+    nlp = pipeline("text-classification", model="ProsusAI/finbert", top_k=None)
+    sent_map, tally = {}, {"POS": 0, "NEG": 0, "NEU": 0}
+    headlines_ui = []
+
+    for article in news:
+        ts = pd.Timestamp(article.created_at).tz_convert('America/New_York')
+        target_date = (ts.normalize() if ts.hour < 16 else (ts + pd.Timedelta(days=1)).normalize()).tz_localize(None)
+        
+        scores = {s['label']: s['score'] for s in nlp(article.headline[:512])[0]}
+        label = "POS" if scores['positive'] > 0.5 else "NEG" if scores['negative'] > 0.5 else "NEU"
+        tally[label] += 1
+        
+        if target_date not in sent_map: sent_map[target_date] = []
+        sent_map[target_date].append([scores['positive'], scores['negative'], scores['neutral']])
+        
+        # Grab URL for the frontend UI links
+        headlines_ui.append({
+            "ts": ts.strftime('%b %d, %H:%M'), 
+            "text": article.headline, 
+            "sentiment": label,
+            "url": getattr(article, 'url', '#') 
+        })
+
+    sent_aligned = [np.mean(sent_map[d], axis=0) if d in sent_map else [0.0, 0.0, 1.0] for d in price_slice.index]
+    
+    return price_slice, np.array(sent_aligned), headlines_ui, tally, final_ticker
+
+
+# ==========================================
+# NEURAL INFERENCE ENGINE
+# ==========================================
 def run_live_v4_prediction(ticker):
-    price_df, sentiment_df, recent_headlines = get_live_data(ticker)
+    price_df, sent_arr, headlines, tally, final_ticker = fetch_and_align_data(ticker)
+    if price_df is None: return {"error": tally}
+
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    scaler = joblib.load(os.path.join(base, 'data', 'scaler.pkl'))
+    model = tf.keras.models.load_model(
+        os.path.join(base, 'data', 'models', 'v4_champion_model.keras'), 
+        custom_objects={'TemporalAttention': TemporalAttention, 'directional_accuracy': directional_accuracy}
+    )
     
-    if price_df is None or len(price_df) < 60:
-        return {"error": f"Failed to fetch enough market data. Error: {recent_headlines}"}
-        
-    scaler = StandardScaler()
-    scaled_price_full = scaler.fit_transform(price_df.values)
+    # 1. Feature Pre-processing (Isolate the 6 neural features from the UI's 'close' price)
+    model_features = price_df[['log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']]
     
-    X_price_live = scaled_price_full[-60:].reshape(1, 60, 6)
-    X_sent_live = sentiment_df.values.reshape(1, 60, 3)
+    # CLAMPING: Prevents Sigmoid Saturation / Feature Dominance
+    scaled_data = np.clip(scaler.transform(model_features.values), -3.0, 3.0)
     
-    model_path = 'data/models/v4_champion_model.keras'
-    if not os.path.exists(model_path):
-        model_path = '../data/models/v4_champion_model.keras'
-        
-    model = tf.keras.models.load_model(model_path, custom_objects={
-        'TemporalAttention': TemporalAttention,
-        'directional_accuracy': directional_accuracy
-    })
+    # 2. Raw Prediction
+    raw_pred = model.predict([scaled_data.reshape(1, 60, 6), sent_arr.reshape(1, 60, 3)], verbose=0)[0][0]
     
-    predicted_log_return = model.predict([X_price_live, X_sent_live], verbose=0)[0][0]
-    predicted_pct_change = (np.exp(predicted_log_return) - 1) * 100
+    # 3. Calibration Layer (Heuristic Logit Shift based on News Momentum)
+    news_bias = (tally['POS'] - tally['NEG']) / (sum(tally.values()) + 1)
+    adjusted_prob = np.clip(raw_pred + (news_bias * 0.1), 0.01, 0.99)
     
-    direction = "BULLISH (UP)" if predicted_pct_change > 0 else "BEARISH (DOWN)"
-    
-    today_sent = sentiment_df.iloc[-1]
-    dominant_vibe = "Neutral"
-    if today_sent['avg_pos'] > 0.4: dominant_vibe = "Positive"
-    if today_sent['avg_neg'] > 0.4: dominant_vibe = "Negative"
+    latest = price_df.iloc[-1]
+    rel_strength = latest['log_return'] - latest['spy_log_return']
 
     return {
-        "success": True,
-        "ticker": ticker,
-        "direction": direction,
-        "prediction_pct": predicted_pct_change,
-        "vibe": dominant_vibe,
-        "pos_score": today_sent['avg_pos'],
-        "neg_score": today_sent['avg_neg'],
-        "price_data": price_df,
-        "sentiment_data": sentiment_df,
-        "headlines": recent_headlines[:5] # Return the top 5 most recent articles
+        "ticker": final_ticker,
+        "signal": "BULLISH" if adjusted_prob > 0.5 else "BEARISH",
+        "confidence": adjusted_prob if adjusted_prob > 0.5 else 1 - adjusted_prob,
+        "history": price_df, # Contains the 'close' column for Plotly
+        "volatility": latest['bb_width'],
+        "rsi": latest['rsi_14'],
+        "macd": latest['macd'] - latest['macd_signal'],
+        "rel_strength": rel_strength,
+        "headlines": headlines,
+        "tally": tally
     }
