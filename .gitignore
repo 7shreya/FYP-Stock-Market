@@ -214,7 +214,11 @@ data/raw/
 data/processed/s
 models/
 .env
-
+# Ignore data except for the specific model and scaler needed for the app
+data/*
+!data/models/
+!data/models/v4_champion_model.keras
+!data/scaler.pkl
 # Python Cache
 __pycache__/
 *.pyc
