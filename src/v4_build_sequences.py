@@ -40,7 +40,6 @@ def build_v4_sequences():
     
     merged_df['true_target_return'] = merged_df['log_return']
     
-    # Using your EXACT confirmed columns
     feature_columns = ['log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']
     sentiment_columns = ['avg_pos', 'avg_neg', 'avg_neu']
     
@@ -87,13 +86,14 @@ def build_v4_sequences():
     
     print(f"\nTotal V4 Sequences Built: {len(y_target)}")
     
+    #loaded from the google drive folder 
     os.makedirs('../data', exist_ok=True)
     np.save('../data/v4_X_price.npy', X_price)
     np.save('../data/v4_X_sentiment.npy', X_sentiment)
     np.save('../data/v4_y_target.npy', y_target)
     np.save('../data/v4_meta_data.npy', meta_data)
     
-    print("V4 RAW Tensors successfully saved to ../data/")
+    print("Complete! Tensors saved to ../data/")
 
 if __name__ == '__main__':
     build_v4_sequences()

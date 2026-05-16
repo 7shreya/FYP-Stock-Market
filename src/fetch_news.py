@@ -15,12 +15,12 @@ DB_PATH = os.getenv('DB_PATH', '../data/stock_data.db')
 
 BASE_URL = 'https://paper-api.alpaca.markets'
 
-# timezone setup for the 16:00 cutoff logic
+#timezone setup for the 16:00 cutoff logic
 eastern = pytz.timezone('US/Eastern')
 start_date = '2020-01-01'
 end_date = '2025-12-31'
 
-# strict data quality threshold defined in the research methodology
+#data quality thresholds for news storied 
 MIN_HEADLINES_THRESHOLD = 50
 
 def get_db_connection():
@@ -35,21 +35,21 @@ def get_tickers_from_db():
     return tickers
 
 def calculate_effective_date(created_at):
-    # alpaca returns a pandas Timestamp. we ensure it is utc timezone aware.
+    #alpaca returns a pandas Timestamp, ensure it is utc timezone aware
     dt_utc = pd.to_datetime(created_at)
     if dt_utc.tzinfo is None:
         dt_utc = dt_utc.tz_localize('UTC')
         
-    # convert to us/eastern market time
+    #convert to US market time
     dt_est = dt_utc.astimezone(eastern)
     
     effective_date = dt_est.date()
     
-    # temporal alignment rule 1: shift post-market news to the next day
+    #temporal alignment rule 1: shift post-market news to the next day
     if dt_est.hour >= 16:
         effective_date += timedelta(days=1)
         
-    # temporal alignment rule 2: shift weekend news to monday
+    # temporal alignment rule 2: also shift weekend news to monday
     while effective_date.weekday() > 4:
         effective_date += timedelta(days=1)
         
@@ -59,7 +59,7 @@ def calculate_effective_date(created_at):
 
 def fetch_news_data(api, ticker):
     try:
-        # fetch historical news. limit=10000 ensures we get the full 5-year history if available.
+        #fetch historical news. limit=10000 ensures the full 5-year history if available
         news_items = api.get_news(
             symbol=ticker, 
             start=start_date, 
@@ -68,7 +68,7 @@ def fetch_news_data(api, ticker):
             include_content=False
         )
         
-        # enforce the data quality threshold
+        #enforce data quality threshold
         headline_count = len(news_items) if news_items else 0
         if headline_count < MIN_HEADLINES_THRESHOLD:
             print(f"Rejected {ticker}: insufficient news volume ({headline_count} headlines). Minimum required is {MIN_HEADLINES_THRESHOLD}.")

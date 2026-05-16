@@ -10,7 +10,7 @@ def export_unprocessed_news():
     print("Exporting unprocessed news to csv")
     conn = sqlite3.connect(DB_PATH)
     
-    # query only the news that hasn't been scored yet
+    #query only the news that hasn't been scored yet
     query = """
         SELECT id, ticker, published_at, headline 
         FROM news_data 

@@ -18,7 +18,7 @@ def import_scored_news():
     print("loading finbert scores from csv...")
     df = pd.read_csv(SCORED_NEWS_CSV)
     
-    # drop any rows that failed processing just in case
+    #drop any rows that failed processing bc of null 
     df = df.dropna(subset=['sentiment_pos', 'sentiment_neg', 'sentiment_neu'])
     
     records = list(df[['sentiment_pos', 'sentiment_neg', 'sentiment_neu', 'id']].itertuples(index=False, name=None))
@@ -28,7 +28,7 @@ def import_scored_news():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # update the existing rows with the new sentiment tensors
+    #update the existing rows with the new sentiment tensors
     cursor.executemany('''
         UPDATE news_data 
         SET sentiment_pos = ?, sentiment_neg = ?, sentiment_neu = ?

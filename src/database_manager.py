@@ -4,7 +4,7 @@ import requests
 import io
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame  # Corrected Case
+from alpaca.data.timeframe import TimeFrame  
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetCalendarRequest
 import src.config as config
@@ -31,7 +31,7 @@ class DataIngestor:
             chunk = tickers[i:i + chunk_size]
             request_params = StockBarsRequest(
                 symbol_or_symbols=chunk,
-                timeframe=TimeFrame.Day, # Corrected Case
+                timeframe=TimeFrame.Day, 
                 start=config.TRAIN_START_DATE,
                 end=config.TRAIN_END_DATE,
                 adjustment='all'
@@ -41,7 +41,7 @@ class DataIngestor:
                 bars = bars.reset_index().rename(columns={'symbol': 'ticker'})
                 self.db.save_prices(bars)
                 print(f"Ingested: {chunk[0]} and batch...")
-                time.sleep(1.0) # Respect rate limits [cite: 303]
+                time.sleep(1.0) 
             except Exception as e:
                 print(f"Error in batch {i}: {e}")
 

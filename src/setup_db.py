@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-db_path = os.getenv('DB_PATH', '../data/stock_data.db')
+db_path = os.getenv('DB_PATH', '../data/stock_data.db') #the other data folder ourside this repo workspace 
 
 def create_tables():
     print(f"initializing database at {db_path}")
@@ -14,7 +14,7 @@ def create_tables():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # price table for OHLCV and calculated returns
+    #price table for OHLCV and calculated returns
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS price_data (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +30,7 @@ def create_tables():
     )
     ''')
 
-    # news table to store raw text and finbert tensors
+    #news table to store raw text and finbert tensors
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS news_data (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

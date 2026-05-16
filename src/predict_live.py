@@ -1,3 +1,6 @@
+
+#predict_live to power the frontend 
+
 import os
 import pandas as pd
 import numpy as np
@@ -10,9 +13,8 @@ import tensorflow.keras.backend as K
 from transformers import pipeline
 from dotenv import load_dotenv
 
-# ==========================================
-# CUSTOM NEURAL NETWORK LAYERS
-# ==========================================
+#custom neiral network layers class 
+
 @tf.keras.utils.register_keras_serializable()
 def directional_accuracy(y_true, y_pred):
     return tf.reduce_mean(tf.cast(tf.equal(tf.sign(y_true), tf.sign(y_pred)), tf.float32)) * 100
@@ -32,42 +34,39 @@ class TemporalAttention(Layer):
     def get_config(self): return super(TemporalAttention, self).get_config()
 
 
-# ==========================================
-# SMART TICKER RESOLUTION (FUZZY SEARCH)
-# ==========================================
+#Fuzzy search functionality for tickers 
 def resolve_ticker(user_input, api):
     """Matches company names or typos to the closest valid Alpaca ticker."""
     user_input = user_input.upper().strip()
     try:
-        # Fetch active assets to avoid overwhelming the search
+        #Fetch active assets to avoid overwhelming the search
         assets = api.list_assets(status='active', asset_class='us_equity')
         ticker_list = [a.symbol for a in assets]
         name_map = {a.name.upper(): a.symbol for a in assets if len(a.name) > 3}
         
-        # 1. Exact Match
+        #Exact Match
         if user_input in ticker_list: return user_input
         
-        # 2. Fuzzy match by Company Name (e.g., "APPLE" -> "AAPL")
+        #Fuzzy match by company name 
         matches = difflib.get_close_matches(user_input, name_map.keys(), n=1, cutoff=0.5)
         if matches: return name_map[matches[0]]
         
-        # 3. Fuzzy Match by Ticker Typo
+        #Fuzzy match by ticker typo
         t_matches = difflib.get_close_matches(user_input, ticker_list, n=1, cutoff=0.6)
         return t_matches[0] if t_matches else user_input
     except: 
         return user_input
 
 
-# ==========================================
 # DATA PIPELINE & FEATURE ENGINEERING
-# ==========================================
+
 def fetch_and_align_data(ticker):
     load_dotenv()
     api = tradeapi.REST(os.getenv('ALPACA_API_KEY'), os.getenv('ALPACA_SECRET_KEY'), os.getenv('APCA_API_BASE_URL'), api_version='v2')
     
     final_ticker = resolve_ticker(ticker, api)
     
-    # Temporal Settings (20 min delay for basic tier)
+    #settings - 20 mins delayayed data is fetched from the API
     now_est = pd.Timestamp.now(tz='America/New_York')
     end_date = now_est - pd.Timedelta(minutes=20)
     start_date = (end_date - pd.Timedelta(days=150)).isoformat()
@@ -83,19 +82,19 @@ def fetch_and_align_data(ticker):
     except Exception as e: 
         return None, None, str(e), None, final_ticker
 
-    # Align Indices & Strip Timezones to fix mapping errors
+    #Align indices & strip timezones to fix mapping errors
     for frame in [bars, spy]: frame.index = frame.index.normalize().tz_localize(None)
 
-    # --- FEATURE ENGINEERING ---
+    #FEATURE ENGINEERING
     df = pd.DataFrame(index=bars.index)
     
-    # CRITICAL: Preserve the raw close price for the UI Plotly Graph
+    #preserve the raw close price for the stock graph
     df['close'] = bars['close'] 
     
     df['log_return'] = np.log(bars['close'] / bars['close'].shift(1))
     df['spy_log_return'] = np.log(spy['close'] / spy['close'].shift(1))
     
-    # Technical Indicators
+    #Technical Indicators
     delta = bars['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -107,10 +106,10 @@ def fetch_and_align_data(ticker):
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['bb_width'] = (bars['close'].rolling(20).std() * 4) / bars['close'].rolling(20).mean()
     
-    # Slice the final 60 days including the close price
+    #Slice the final 60 days including the close price
     price_slice = df[['close', 'log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']].dropna().tail(60)
 
-    # --- NLP SENTIMENT STREAM ---
+    #NLP SENTIMENT STREAM
     nlp = pipeline("text-classification", model="ProsusAI/finbert", top_k=None)
     sent_map, tally = {}, {"POS": 0, "NEG": 0, "NEU": 0}
     headlines_ui = []
@@ -126,7 +125,7 @@ def fetch_and_align_data(ticker):
         if target_date not in sent_map: sent_map[target_date] = []
         sent_map[target_date].append([scores['positive'], scores['negative'], scores['neutral']])
         
-        # Grab URL for the frontend UI links
+        #Get the URL for the news stories links to the external websites
         headlines_ui.append({
             "ts": ts.strftime('%b %d, %H:%M'), 
             "text": article.headline, 
@@ -139,9 +138,8 @@ def fetch_and_align_data(ticker):
     return price_slice, np.array(sent_aligned), headlines_ui, tally, final_ticker
 
 
-# ==========================================
 # NEURAL INFERENCE ENGINE
-# ==========================================
+
 def run_live_v4_prediction(ticker):
     price_df, sent_arr, headlines, tally, final_ticker = fetch_and_align_data(ticker)
     if price_df is None: return {"error": tally}
@@ -153,16 +151,16 @@ def run_live_v4_prediction(ticker):
         custom_objects={'TemporalAttention': TemporalAttention, 'directional_accuracy': directional_accuracy}
     )
     
-    # 1. Feature Pre-processing (Isolate the 6 neural features from the UI's 'close' price)
+    # Feature pre-processing (Isolate the 6 neural features from the frontend 'close' price)
     model_features = price_df[['log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']]
     
-    # CLAMPING: Prevents Sigmoid Saturation / Feature Dominance
+    #LAMPING: Prevents Sigmoid Saturation / feature dominance
     scaled_data = np.clip(scaler.transform(model_features.values), -3.0, 3.0)
     
-    # 2. Raw Prediction
+    #Raw Prediction
     raw_pred = model.predict([scaled_data.reshape(1, 60, 6), sent_arr.reshape(1, 60, 3)], verbose=0)[0][0]
     
-    # 3. Calibration Layer (Heuristic Logit Shift based on News Momentum)
+    #Calibration layer
     news_bias = (tally['POS'] - tally['NEG']) / (sum(tally.values()) + 1)
     adjusted_prob = np.clip(raw_pred + (news_bias * 0.1), 0.01, 0.99)
     
@@ -173,7 +171,7 @@ def run_live_v4_prediction(ticker):
         "ticker": final_ticker,
         "signal": "BULLISH" if adjusted_prob > 0.5 else "BEARISH",
         "confidence": adjusted_prob if adjusted_prob > 0.5 else 1 - adjusted_prob,
-        "history": price_df, # Contains the 'close' column for Plotly
+        "history": price_df, # Contains the 'close' column for Plotly chart 
         "volatility": latest['bb_width'],
         "rsi": latest['rsi_14'],
         "macd": latest['macd'] - latest['macd_signal'],

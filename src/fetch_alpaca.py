@@ -24,7 +24,7 @@ def get_db_connection():
 def get_sp100_tickers():
     print("Requesting S&P 100 constituents from BlackRock iShares...")
     
-    # robust browser user-agent to bypass standard 403 blocks
+    #user agent
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
@@ -35,7 +35,7 @@ def get_sp100_tickers():
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         
-        # skip the legal boilerplate at the top of the csv
+        #skip the top of csv
         csv_data = StringIO(response.text)
         df = pd.read_csv(csv_data, skiprows=9)
         
@@ -45,18 +45,18 @@ def get_sp100_tickers():
         
         clean_tickers = []
         for ticker in tickers:
-            # filter out cash, usd equivalents, or derivatives
+            #filter out cash, usd equivalents, or derivatives
             if ticker in ['USD', 'CASH'] or len(str(ticker)) > 5:
                 continue
             
-            # format for alpaca -
+            #format for alpaca
             clean_ticker = str(ticker).replace('.', '-')
             clean_tickers.append(clean_ticker)
             
         print(f"successfully extracted {len(clean_tickers)} tickers")
         clean_tickers = clean_tickers[:100]
         
-        # add the macro indicator to the end of the list
+        #add the macro indicator to the end of the list
         clean_tickers.append('SPY')
         return clean_tickers
         
@@ -66,7 +66,7 @@ def get_sp100_tickers():
 
 def fetch_price_data(api, ticker):
     try:
-        # fetch historical daily bars, adjusted for splits
+        #fetch historical daily bars adjusted for splits
         bars = api.get_bars(
             ticker, 
             TimeFrame.Day, 
@@ -97,7 +97,7 @@ def fetch_price_data(api, ticker):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # ignore duplicates so we can rerun safely if the script crashes halfway
+        #ignore duplicates 
         cursor.executemany('''
             INSERT OR IGNORE INTO price_data (ticker, trade_date, open, high, low, close, volume)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -128,7 +128,7 @@ def run_extraction():
         print(f"[{count}/{len(tickers)}] processing {ticker}...", end=" ")
         fetch_price_data(api, ticker)
         
-        # strict rate limiting for the free tier
+        #rate limiting 
         time.sleep(1)
         
     print("price extraction pipeline complete")

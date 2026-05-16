@@ -5,17 +5,16 @@ from src.config import DB_PATH
 from datetime import timedelta
 
 def load_data(ticker):
-    """Loads raw price and news data from the database."""
+    """Pull price + news rows out of the db for a given ticker."""
     conn = sqlite3.connect(DB_PATH)
     
-    # Load Prices
+    #prices first
     print(f"   Loading prices for {ticker}...")
     df_price = pd.read_sql(
         "SELECT date, open, high, low, close, volume FROM prices WHERE ticker = ? ORDER BY date",
         conn, params=(ticker,)
     )
     
-    # Load News
     print(f"   Loading news for {ticker}")
     df_news = pd.read_sql(
         "SELECT date, sentiment_score FROM news WHERE ticker = ?",
@@ -24,34 +23,28 @@ def load_data(ticker):
     
     conn.close()
     return df_price, df_news
-
+#look ahead bias prevention 
 def align_news_to_trading_hours(df_news):
     """
-    Applies strict time alignment to prevent Look-Ahead Bias.
-    1. News > 16:00 -> Next Day
-    2. Weekends -> Next Monday
+    Realigns news timestamps to prevent look-ahead bias.
+    Post-market news can't affect that day's price action so we push it forward.
+    Weekends roll to Monday for the same reason.
     """
     if df_news.empty:
         return df_news
     
-    # Convert to datetime
     df_news['date'] = pd.to_datetime(df_news['date'], utc=True)
     
-    # 1. SHIFT AFTER-HOURS NEWS
-    # Identify news that happened after 16:00 (4 PM)
-    # We add 1 day to these dates effectively moving them to "Tomorrow"
+    #anything after 4pm is next-day 
     after_hours_mask = df_news['date'].dt.hour >= 16
     df_news.loc[after_hours_mask, 'date'] = df_news.loc[after_hours_mask, 'date'] + timedelta(days=1)
     
-    # 2. NORMALIZE TO DATE ONLY
-    # Now that we shifted the time, we only care about the Date
+    #drop the time, only the date matters from here
     df_news['aligned_date'] = df_news['date'].dt.date
     
-    # 3. HANDLE WEEKENDS
-    # If the (shifted) date is a Saturday (5) -> Move to Monday (+2 days)
-    # If the (shifted) date is a Sunday (6)   -> Move to Monday (+1 day)
     df_news['weekday'] = df_news['date'].dt.weekday
     
+    #sat=5, sun=6 - no trading so roll to Monday
     mask_sat = df_news['weekday'] == 5
     mask_sun = df_news['weekday'] == 6
     
@@ -63,38 +56,31 @@ def align_news_to_trading_hours(df_news):
 def create_training_set(ticker):
     print(f"Engineering features for {ticker}...")
     
-    # 1. Load Raw Data
     df_price, df_news = load_data(ticker)
     
     if df_price.empty:
         print(f"No price data found for {ticker}. Did you run data_loader?")
         return None
 
-    # 2. Process Prices
-    # Ensure standard UTC datetime and set index
+    #dates only, then index on them
     df_price['date'] = pd.to_datetime(df_price['date'], utc=True).dt.date
     df_price.set_index('date', inplace=True)
     
-    # 3. Process & Align News
     if not df_news.empty:
         df_news = align_news_to_trading_hours(df_news)
         
-        # Aggregate: If multiple articles exist for one day, take the MEAN score
-        # FIX: We add .rename('sentiment_score') so pandas knows the column name
+        #multiple articles same day -> average them out
         daily_sentiment = df_news.groupby('aligned_date')['sentiment_score'].mean().rename('sentiment_score')
     else:
-        # FIX: We explicitly give the empty series a name
-        daily_sentiment = pd.Series(dtype=float, name='sentiment_score')
+        daily_sentiment = pd.Series(dtype=float, name='sentiment_score')  #empty but named so the join doesn't break
     
-    # 4. Merge (Left Join)
-    # We keep all Price days. If there's news, we attach it.
+    #left join so every price row survives -sentiment only where it exists
+    #forward-filling old scores would introduce look-ahead bias, so we don't
     full_df = df_price.join(daily_sentiment, how='left')
     
-    # 5. Handle Missing Sentiment (Null News Days)
-    # If no news happened that day, assume Neutral (0.0)
+    #no news that day = neutral, don't carry forward a previous score
     full_df['sentiment_score'] = full_df['sentiment_score'].fillna(0.0)
     
-    # 6. Final Cleanup
     full_df.dropna(inplace=True)
     full_df.sort_index(inplace=True)
     

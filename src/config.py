@@ -36,6 +36,7 @@ Curated list of major S&P equities by secto.
 
 # config.py
 
+#this list is for the market explorer page frontend- for the buttons labels only 
 SP100_SECTORS = {
     "Information Technology": [("NVDA", "NVIDIA"), ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("AVGO", "Broadcom"), ("ORCL", "Oracle"), ("MU", "Micron Technology"), ("AMD", "AMD"), ("CSCO", "Cisco Systems"), ("CRM", "Salesforce"), ("AMAT", "Applied Materials")],
     "Financials": [("BRK.B", "Berkshire Hathaway"), ("JPM", "JPMorgan Chase"), ("V", "Visa"), ("MA", "Mastercard"), ("BAC", "Bank of America"), ("MS", "Morgan Stanley"), ("GS", "Goldman Sachs"), ("C", "Citigroup"), ("WFC", "Wells Fargo"), ("BLK", "BlackRock")],

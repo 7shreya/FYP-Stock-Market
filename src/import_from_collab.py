@@ -1,4 +1,5 @@
 # src/import_from_colab.py
+
 import pandas as pd
 import sqlite3
 import os
@@ -14,9 +15,7 @@ def import_colab_data():
     print("Reading Scored Data...")
     df = pd.read_csv(csv_path)
     
-    # --- CRITICAL: TIME STANDARDIZATION ---
-    # We must ensure dates are parsed as UTC to match the prices later.
-    df['date'] = pd.to_datetime(df['date'], errors='coerce', utc=True)
+    df['date'] = pd.to_datetime(df['date'], errors='coerce', utc=True)#utc
     df = df.dropna(subset=['date'])
     
     # Format strictly as YYYY-MM-DD HH:MM:SS for the alignment logic

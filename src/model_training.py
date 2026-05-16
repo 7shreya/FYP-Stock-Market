@@ -136,14 +136,12 @@ def train_network():
         val_loss, val_mae, dir_acc = model.evaluate([X_price_val, X_sent_val], y_val, verbose=0)
         print(f"Fold {fold} Results -> Huber Loss: {val_loss:.6f} | Dir Acc: {dir_acc:.2f}%")
         fold_scores.append(dir_acc)
-        
-        # --- DISSERTATION ARTIFACT GENERATION (Final Fold Only) ---
+       
         if fold == 5:
             os.makedirs('../models', exist_ok=True)
             model.save('../models/dual_stream_attention.keras')
             print("\nFinal model saved to disk.")
             
-            print("Exporting prediction artifacts for dissertation analysis...")
             predictions = model.predict([X_price_val, X_sent_val]).flatten()
             
             results_df = pd.DataFrame({
@@ -153,7 +151,7 @@ def train_network():
             })
             
             results_df.to_csv('../data/final_fold_predictions.csv', index=False)
-            print("Saved final_fold_predictions.csv. Use this for your methodology graphs.")
+            print("Saved final_fold_predictions.csv")
             
         fold += 1
         
