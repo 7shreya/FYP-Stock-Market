@@ -33,7 +33,6 @@ def build_dual_stream_model(seq_length=60):
     # ---------------------------------------------------------
     # LATE FUSION: Combining the Streams
     # ---------------------------------------------------------
-    # This fulfills the "hybrid" requirement of the dissertation
     merged_layer = Concatenate(name="Feature_Fusion")([price_features, sentiment_features])
     
     # Fully Connected Dense Layers to interpret the fused data
