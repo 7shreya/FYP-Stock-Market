@@ -345,7 +345,8 @@ elif st.session_state['current_page'] == "Dashboard":
             
             price_slice = df[['close', 'log_return', 'rsi_14', 'macd', 'macd_signal', 'bb_width', 'spy_log_return']].dropna().tail(60)
 
-            nlp = pipeline("text-classification", model="ProsusAI/finbert", top_k=None)
+            #nlp = pipeline("text-classification", model="ProsusAI/finbert", top_k=None)
+            nlp = pipeline("text-classification", model="ProsusAI/finbert", top_k=None, framework="pt")
             sent_map, tally = {}, {"POS": 0, "NEG": 0, "NEU": 0}
             headlines_ui = []
 
