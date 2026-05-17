@@ -23,8 +23,11 @@ python-dotenv==1.0.1
 sqlalchemy==2.0.30
 yfinance==0.2.40
 transformers==4.41.2
+tokenizers==0.19.1
+huggingface-hub==0.23.4
+safetensors==0.4.3
 torch==2.2.2
 scikit-learn==1.4.2
-streamlit==1.35.0
+streamlit==1.39.0
 tensorflow-cpu==2.16.1
 plotly==5.22.0
